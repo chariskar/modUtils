@@ -17,7 +17,7 @@
 package modUtils;
 
 import modUtils.commands.Command;
-import modUtils.commands.checkAlts;
+import modUtils.commands.searchAlts;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.minecraft.client.MinecraftClient;
@@ -37,7 +37,7 @@ public class modUtils implements ClientModInitializer {
     public void onInitializeClient() {
         MinecraftClient client = MinecraftClient.getInstance();
         loadCommands(
-                new checkAlts()
+                new searchAlts()
         );
         ClientReceiveMessageEvents.GAME.register(this::onGameMessageReceived);
     }
@@ -66,7 +66,7 @@ public class modUtils implements ClientModInitializer {
         coreProtectBuffer.append(messageContent).append("\n");
 
         if (messageContent.contains("No block data found") || messageContent.contains("Lookup Results")) {
-
+            // TODO: implement the actual logic on how the message is collected
         }
 
     }

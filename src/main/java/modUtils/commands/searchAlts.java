@@ -20,11 +20,11 @@ package modUtils.commands;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.text.Text;
-import modUtils.commands.Command;
+
 import java.util.ArrayList;
 import java.util.List;
 
-public class checkAlts extends Command {
+public class searchAlts extends Command {
 
     public void register() {
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {

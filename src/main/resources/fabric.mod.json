@@ -3,7 +3,7 @@
 	"id": "modutils",
 	"version": "${version}",
 	"name": "modUtils",
-	"description": "This is the mod version of breakthebot.",
+	"description": "",
 	"authors": [
 		"chariskar"
 	],
@@ -13,15 +13,13 @@
 		"discord": "https://discord.gg/RVkwSrPyuq"
 	},
 	"license": "GPLV3",
-	"icon": "assets/icon.png",
 	"environment": "client",
 	"custom": {
 		"modmenu": {
 			"links": {
 				"modmenu.discord": "https://discord.gg/RVkwSrPyuq"
 			},
-			"update-checker": true,
-			"modmenu.icon": "assets/icon.png"
+			"update-checker": true
 		}
 	  },
 	"entrypoints": {
