@@ -3,7 +3,7 @@
 	"id": "modutils",
 	"version": "${version}",
 	"name": "modUtils",
-	"description": "",
+	"description": "Utilities for emc mods",
 	"authors": [
 		"chariskar"
 	],
@@ -12,6 +12,7 @@
 		"author": "https://github.com/chariskar",
 		"discord": "https://discord.gg/RVkwSrPyuq"
 	},
+	"icon": "assets/img.png",
 	"license": "GPLV3",
 	"environment": "client",
 	"custom": {

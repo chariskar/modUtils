@@ -14,105 +14,257 @@
  * You should have received a copy of the GNU General Public License
  * along with modUtils. If not, see <https://www.gnu.org/licenses/>.
  */
-
 package modUtils.commands;
 
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
+import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.network.PlayerListEntry;
 import net.minecraft.text.Text;
+import net.minecraft.util.Formatting;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
+import java.util.concurrent.*;
 
 public class searchAlts extends Command {
+    private static searchAlts instance;
 
+    // Scanning state.
+    private boolean scanningInProgress = false;
+    private String currentScanning = null;
+    // Buffer for alt lines received for the current player.
+    private final List<String> altNamesBuffer = new ArrayList<>();
+    // Map of player name -> list of alt entries.
+    private final Map<String, List<String>> altData = new HashMap<>();
+    // Queue of players to scan.
+    private final Queue<String> playerQueue = new LinkedList<>();
+
+    // Scheduler for processing players sequentially.
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+    // Fixed delay per player (milliseconds) – adjust as needed for speed vs reliability.
+    private final int SCAN_DELAY = 1250;
+
+    private searchAlts() {}
+
+    public static searchAlts getInstance() {
+        if (instance == null) {
+            instance = new searchAlts();
+        }
+        return instance;
+    }
+
+    /**
+     * Registers the /searchAlts command and chat listeners.
+     */
     public void register() {
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             dispatcher.register(
-                    net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.literal("searchAlts")
-                            .executes(context -> {
-
-                                performAltCheck();
+                    ClientCommandManager.literal("searchAlts")
+                            .executes(ctx -> {
+                                startAltScan();
                                 return 1;
                             })
             );
         });
+
+        // Listen on both game and chat channels.
+        ClientReceiveMessageEvents.ALLOW_GAME.register((text, overlay) -> handleIncomingChat(text));
+        ClientReceiveMessageEvents.ALLOW_CHAT.register((message, sender, typeKey, params, receptionTime) -> handleIncomingChat(message));
     }
+
     /**
-     * Iterates over online players, simulates the /alts command for each,
-     * and displays a chat message listing players with multiple alternate accounts.
+     * Initiates the alt scanning process.
      */
-    private void performAltCheck() {
+    private void startAltScan() {
+        clearAltData();
+        queueAllPlayers();
+
         MinecraftClient client = MinecraftClient.getInstance();
-        if (client.world == null) {
-            client.player.sendMessage(Text.literal("No world loaded."), false);
+        if (client.player != null) {
+            client.player.sendMessage(Text.literal("Starting alt scans..."), false);
+        }
+        if (playerQueue.isEmpty()) {
+            client.player.sendMessage(Text.literal("No players found to scan."), false);
             return;
         }
+        scanningInProgress = true;
+        processNextPlayer();
+    }
 
-        List<String> flaggedPlayers = new ArrayList<>();
-
-        // Iterate through all players currently in the world.
-        client.world.getPlayers().forEach(player -> {
-            String playerName = player.getGameProfile().getName();
-            String altsOutput = simulateAltsCommand(playerName);
-            if (hasMultipleAlts(altsOutput)) {
-                flaggedPlayers.add(playerName);
+    /**
+     * Fills playerQueue using the network handler’s player list (tab list) if available,
+     * otherwise falls back to the world's player list.
+     */
+    private void queueAllPlayers() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.getNetworkHandler() != null) {
+            for (PlayerListEntry entry : client.getNetworkHandler().getPlayerList()) {
+                String name = entry.getProfile().getName();
+                if (!name.equals(client.player.getGameProfile().getName())) {
+                    playerQueue.add(name);
+                }
             }
-        });
-
-        // Build the output with a header and flagged player names.
-        StringBuilder output = new StringBuilder();
-        output.append("[Online] [Offline] [Banned] [IPBanned]\n");
-        if (flaggedPlayers.isEmpty()) {
-            output.append("No players flagged.");
-        } else {
-            flaggedPlayers.forEach(name -> output.append(name).append("\n"));
+        } else if (client.world != null && client.player != null) {
+            client.world.getPlayers().forEach(player -> {
+                String name = player.getGameProfile().getName();
+                if (!name.equals(client.player.getGameProfile().getName())) {
+                    playerQueue.add(name);
+                }
+            });
         }
-
-        // Display the results in the chat.
-        client.player.sendMessage(Text.literal(output.toString()), false);
+        System.out.println("Queued players count: " + playerQueue.size());
     }
 
     /**
-     *
-     * Simulates the output of the "/alts {player}" command.
-     *
-     * <p>For demonstration, this dummy implementation assumes that if the player's name
-     * contains "alt" (case insensitive), then the output lists multiple alternate accounts.
-     * Otherwise, it returns a single name.
-     *
-     * @param playerName the name of the player to simulate the command for.
-     * @return a simulated multi-line output string.
+     * Processes the next player in the queue.
+     * Sends the "/alts <name>" command and schedules finalization after SCAN_DELAY.
      */
-    private String simulateAltsCommand(String playerName) {
-        if (playerName.toLowerCase().contains("alt")) {
-            // Simulate multiple alts: header line and a list with commas.
-            return "[Online] [Offline] [Banned] [IPBanned]\n"
-                    + playerName + ", AltAccount1, AltAccount2";
+    private void processNextPlayer() {
+        if (playerQueue.isEmpty()) {
+            finishAllScans();
+            return;
+        }
+        currentScanning = playerQueue.poll();
+        altNamesBuffer.clear();
+
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.player != null) {
+            client.player.networkHandler.sendChatCommand("alts " + currentScanning);
+        }
+
+        scheduler.schedule(() -> MinecraftClient.getInstance().execute(() -> {
+            finalizeCurrentScan();
+            processNextPlayer();
+        }), SCAN_DELAY, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Finalizes the scan for the current player by processing the buffered alt data.
+     * This revised logic splits a line only on commas, so that alt names with spaces remain intact.
+     */
+    private void finalizeCurrentScan() {
+        if (currentScanning != null && !altNamesBuffer.isEmpty()) {
+            List<String> finalList = new ArrayList<>();
+            for (String line : altNamesBuffer) {
+                if (line.contains(",")) {
+                    String[] parts = line.split(",");
+                    for (String part : parts) {
+                        String alt = part.trim();
+                        if (!alt.isEmpty()) {
+                            finalList.add(alt);
+                        }
+                    }
+                } else {
+                    String alt = line.trim();
+                    if (!alt.isEmpty()) {
+                        finalList.add(alt);
+                    }
+                }
+            }
+            System.out.println("Scanned player " + currentScanning + " alt list: " + finalList);
+            altData.put(currentScanning, finalList);
+            altNamesBuffer.clear();
+        }
+        currentScanning = null;
+    }
+
+    /**
+     * Determines the overall status for a player based on their alt data.
+     * Returns a Formatting color:
+     *  - RED if any alt is banned,
+     *  - YELLOW if any alt is IP banned,
+     *  - GREEN if any alt is online,
+     *  - GRAY otherwise (offline).
+     *
+     * This assumes that alt entries contain one of these keywords.
+     */
+    private Formatting determinePlayerStatus(List<String> alts) {
+        boolean online = false;
+        boolean banned = false;
+        boolean ipbanned = false;
+        for (String alt : alts) {
+            String lower = alt.toLowerCase();
+            if (lower.contains("banned")) {
+                banned = true;
+            }
+            if (lower.contains("ipbanned") || lower.contains("ip-banned")) {
+                ipbanned = true;
+            }
+            if (lower.contains("online")) {
+                online = true;
+            }
+        }
+        if (banned) return Formatting.RED;
+        if (ipbanned) return Formatting.YELLOW;
+        if (online) return Formatting.GREEN;
+        return Formatting.GRAY;
+    }
+
+    /**
+     * Called when scanning is complete.
+     * Displays flagged players (those with 2+ alt accounts) with colored names and alt counts.
+     */
+    private void finishAllScans() {
+        scanningInProgress = false;
+        // Finalize any pending scan.
+        finalizeCurrentScan();
+
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.player == null) return;
+
+        List<String> flagged = new ArrayList<>();
+        for (Map.Entry<String, List<String>> entry : altData.entrySet()) {
+            if (entry.getValue().size() >= 2) {
+                flagged.add(entry.getKey());
+            }
+        }
+        if (flagged.isEmpty()) {
+            client.player.sendMessage(Text.literal("No flagged players."), false);
         } else {
-            // Simulate a single alt.
-            return "[Online] [Offline] [Banned] [IPBanned]\n" + playerName;
+            client.player.sendMessage(Text.literal("Flagged players:"), false);
+            for (String name : flagged) {
+                List<String> alts = altData.get(name);
+                Formatting color = determinePlayerStatus(alts);
+                int count = alts.size();
+                Text message = Text.literal(name + " (" + count + " accounts)").formatted(color);
+                client.player.sendMessage(message, false);
+            }
         }
     }
 
     /**
-     * Determines whether the simulated output indicates multiple alts.
-     *
-     * <p>This method splits the output by newlines, ignores the first line (header),
-     * and checks if the second line (the alts list) contains a comma.
-     *
-     * @param output the simulated command output.
-     * @return true if multiple alts are detected; false otherwise.
+     * Intercepts incoming chat messages.
+     * If scanning is active, stores messages as alt data.
      */
-    private boolean hasMultipleAlts(String output) {
-        if (output == null || output.isEmpty()) {
-            return false;
+    private boolean handleIncomingChat(Text text) {
+        String message = text.getString().trim();
+        if (message.isEmpty() || !scanningInProgress) {
+            return true;
         }
-        String[] lines = output.split("\\R"); // Split on any line break.
-        if (lines.length < 2) {
-            return false;
+        // Optionally ignore system messages.
+        if (message.startsWith("Scanning ") || message.equalsIgnoreCase("No Player's Tagged.")) {
+            return true;
         }
-        String altList = lines[1].trim();
-        return altList.contains(",");
+        altNamesBuffer.add(message);
+        return true;
+    }
+
+    /**
+     * Returns an unmodifiable view of the alt data.
+     */
+    public Map<String, List<String>> getAltData() {
+        return Collections.unmodifiableMap(altData);
+    }
+
+    /**
+     * Clears all stored alt data.
+     */
+    public void clearAltData() {
+        altData.clear();
+        altNamesBuffer.clear();
+        currentScanning = null;
+        scanningInProgress = false;
+        playerQueue.clear();
     }
 }

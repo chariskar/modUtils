@@ -37,9 +37,9 @@ public class modUtils implements ClientModInitializer {
     public void onInitializeClient() {
         MinecraftClient client = MinecraftClient.getInstance();
         loadCommands(
-                new searchAlts()
+                searchAlts.getInstance()
         );
-        ClientReceiveMessageEvents.GAME.register(this::onGameMessageReceived);
+
     }
 
     /**
@@ -51,24 +51,6 @@ public class modUtils implements ClientModInitializer {
         }
     }
 
-    /**
-     * detect if a co command has been used, so the output can be logged to be analysed further
-     */
-    private void onGameMessageReceived(Text message, boolean overlay) {
-        String messageContent = message.getString();
-        Pattern pattern = Pattern.compile("^/(co l|co lookup|coreprotect l|coreprotect lookup)\\b");
-        Matcher matcher = pattern.matcher(message.toString());
-        StringBuilder coreProtectBuffer = new StringBuilder();
-        if (messageContent.contains("CoreProtect - Lookup searching")) {
-            coreProtectBuffer.setLength(0); // clear old data
-        }
 
-        coreProtectBuffer.append(messageContent).append("\n");
-
-        if (messageContent.contains("No block data found") || messageContent.contains("Lookup Results")) {
-            // TODO: implement the actual logic on how the message is collected
-        }
-
-    }
 
 }
