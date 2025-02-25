@@ -43,7 +43,7 @@ public class searchAlts extends Command {
     // Scheduler for processing players sequentially.
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     // Fixed delay per player (milliseconds) – adjust as needed for speed vs reliability.
-    private final int SCAN_DELAY = 1250;
+    private final int SCAN_DELAY = 650;
 
     private searchAlts() {}
 
@@ -113,7 +113,6 @@ public class searchAlts extends Command {
                 }
             });
         }
-        System.out.println("Queued players count: " + playerQueue.size());
     }
 
     /**
@@ -162,7 +161,6 @@ public class searchAlts extends Command {
                     }
                 }
             }
-            System.out.println("Scanned player " + currentScanning + " alt list: " + finalList);
             altData.put(currentScanning, finalList);
             altNamesBuffer.clear();
         }
@@ -174,13 +172,11 @@ public class searchAlts extends Command {
      * Returns a Formatting color:
      *  - RED if any alt is banned,
      *  - YELLOW if any alt is IP banned,
-     *  - GREEN if any alt is online,
-     *  - GRAY otherwise (offline).
-     *
+     *  - GRAY otherwise.
+     * (Green is omitted since everyone is online anyway.)
      * This assumes that alt entries contain one of these keywords.
      */
     private Formatting determinePlayerStatus(List<String> alts) {
-        boolean online = false;
         boolean banned = false;
         boolean ipbanned = false;
         for (String alt : alts) {
@@ -191,19 +187,17 @@ public class searchAlts extends Command {
             if (lower.contains("ipbanned") || lower.contains("ip-banned")) {
                 ipbanned = true;
             }
-            if (lower.contains("online")) {
-                online = true;
-            }
         }
-        if (banned) return Formatting.RED;
+        if (banned) return Formatting.DARK_RED;
         if (ipbanned) return Formatting.YELLOW;
-        if (online) return Formatting.GREEN;
         return Formatting.GRAY;
     }
 
     /**
      * Called when scanning is complete.
-     * Displays flagged players (those with 2+ alt accounts) with colored names and alt counts.
+     * Displays flagged players (those with 2+ alt accounts) sorted by alt count (high to low)
+     * and then displays a summary message.
+     * If only one (or zero) player is flagged, only the summary message is shown.
      */
     private void finishAllScans() {
         scanningInProgress = false;
@@ -219,18 +213,25 @@ public class searchAlts extends Command {
                 flagged.add(entry.getKey());
             }
         }
-        if (flagged.isEmpty()) {
-            client.player.sendMessage(Text.literal("No flagged players."), false);
-        } else {
-            client.player.sendMessage(Text.literal("Flagged players:"), false);
-            for (String name : flagged) {
-                List<String> alts = altData.get(name);
-                Formatting color = determinePlayerStatus(alts);
-                int count = alts.size();
-                Text message = Text.literal(name + " (" + count + " accounts)").formatted(color);
-                client.player.sendMessage(message, false);
-            }
+        int totalScanned = altData.size();
+        int flaggedCount = flagged.size();
+
+        if (flaggedCount <= 1) {
+            client.player.sendMessage(Text.literal(flaggedCount + " out of " + totalScanned + " people scanned have been flagged."), false);
+            return;
         }
+
+        flagged.sort((a, b) -> Integer.compare(altData.get(b).size(), altData.get(a).size()));
+
+        client.player.sendMessage(Text.literal("Flagged players:"), false);
+        for (String name : flagged) {
+            List<String> alts = altData.get(name);
+            Formatting color = determinePlayerStatus(alts);
+            int count = alts.size();
+            Text message = Text.literal(name + " (" + count + " accounts)").formatted(color);
+            client.player.sendMessage(message, false);
+        }
+        client.player.sendMessage(Text.literal(flaggedCount + " out of " + totalScanned + " people scanned have been flagged."), false);
     }
 
     /**
